@@ -1,0 +1,214 @@
+#!/usr/bin/env node
+
+const fs = require('fs')
+const util = require('util');
+const promisify = util.promisify
+const saveToken = promisify(fs.writeFile)
+const readToken = promisify(fs.readFile)
+
+const Koa = require('koa');
+const koaRouter = require('koa-router');
+const app = new Koa();
+
+const Deferred = require('deferred')
+const rp = require('request-promise-native');
+const exec = require('child_process').execFileSync;
+const querystring = require('querystring');
+
+require('dotenv').config()
+
+const CLIENT_ID = process.env.CLIENT_ID,
+    CLIENT_SECRET = process.env.CLIENT_SECRET
+
+// TODO: read ~/.spoti for token here only run exec below if we dont have atoken
+// geting token in callback query
+
+const payload = process.env.CLIENT_ID + ":" + process.env.CLIENT_SECRET;
+const encodedPayload = new Buffer(payload).toString("base64");
+
+function createOptions(method, action, token) {
+
+    const body = {
+        "context_uri": "spotify:playlist:66HUI5Q1yJ2wpjwSlLUYAT",
+        "offset": {
+            "position": 0
+        },
+        "position_ms": 0
+    }
+
+    return {
+        method: method,
+        uri: `https://api.spotify.com/v1/me/player/${action}?state=''&device_id=71a27f8f4263f22c8e72352dafbd3c62ba0aaf76&`,
+        body: JSON.stringify(body),
+        headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+        }
+    }
+}
+
+function callbackServer() {
+    const router = koaRouter()
+    const result = new Deferred
+
+    router.get('/callback', async ctx => {
+
+        //code
+        let code = ctx.query.code
+
+        let query = {
+            grant_type: 'authorization_code',
+            redirect_uri: 'http://localhost:3000/callback',
+            code: code
+        }
+
+        let options = {
+            method: 'POST',
+            uri: 'https://accounts.spotify.com/api/token',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': 'Basic ' + encodedPayload
+            },
+            body: querystring.stringify(query)
+        }
+
+        rp.post(options, async function (err, res) {
+            let body = JSON.parse(res.body)
+            result.resolve(body)
+        })
+    })
+
+    app.use(router.routes());
+
+    if (!fs.existsSync('./token.json')) {
+        app.listen(3000, _ => {
+            exec('open', [`https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=http://localhost:3000/callback&scope=user-modify-playback-state`])
+        });
+
+    }
+
+    return result
+}
+
+// readConfig reads the config from disk.
+async function readConfig(path) {
+    try {
+        const token = await readToken('/Users/asyalem/Developer/spoti/token.json')
+        return token.toString()
+    } catch (err) {
+        throw err
+    }
+}
+
+// writeConfig saves the config to disk.
+async function writeConfig(config) {
+    config.createdAt = new Date()
+    let json = JSON.stringify(config)
+    try {
+        await saveToken('token.json', json)
+        console.log('token has been saved! *.*')
+    } catch (err) {
+        throw err
+    }
+}
+
+// getConfig returns a valid token, either from disk, via a code or refresh
+// token.
+async function getConfig() {
+    if (fs.existsSync('./token.json')) {
+        const path = process.env.HOME + '/.spoti'
+
+        let config = await readConfig(path)
+        let obj = JSON.parse(config)
+        let createdAt = new Date(obj.createdAt).getTime();
+
+        console.log('config:', obj, (new Date().getTime() - createdAt) / 60000)
+
+        let query = {
+            grant_type: 'refresh_token',
+            refresh_token: obj.refresh_token
+        }
+
+        let options = {
+            method: 'POST',
+            uri: 'https://accounts.spotify.com/api/token',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': 'Basic ' + encodedPayload
+
+            },
+            body: querystring.stringify(query)
+        }
+
+        if ((new Date().getTime() - createdAt) / 60000 >= 60) {
+            console.log('refresh')
+            rp.post(options, async function (err, res) {
+                if (err) {
+                    throw err;
+                }
+                console.log(res.body)
+                let body = JSON.parse(res.body)
+                console.log('new:', body.access_token)
+                writeConfig(body)
+                return body.access_token
+            })
+        }
+
+        if (obj.access_token) {
+            console.log(obj.createdAt)
+            return obj
+        }
+    }
+    // no token, request one
+    config = await callbackServer()
+    await writeConfig(config)
+    return config
+}
+
+async function main() {
+    let args = process
+        .argv
+        .slice(2)
+
+    let arg = args[0]
+
+    const {access_token} = await getConfig()
+
+    switch (arg) {
+        case 'play':
+            await rp(createOptions('PUT', arg, access_token));
+            break
+
+        case 'pause':
+            await rp(createOptions('PUT', arg, access_token));
+            break
+
+        case 'next':
+        case 'n':
+            await rp(createOptions('POST', 'next', access_token));
+            break
+
+        case 'previous':
+        case 'pre':
+            await rp(createOptions('POST', 'previous', access_token));
+            break
+
+        case 'shuffle':
+            console.log('Here: ', createOptions('PUT', arg, true));
+            await rp(createOptions('PUT', arg, true));
+            break
+
+        case 'volume':
+            args.shift()
+            let flag = parseInt(args[0])
+            let action = `volume?volume_percent=${parseInt(args[0])}`
+            await rp(createOptions('PUT', action));
+            break
+    }
+
+}
+
+// function c(){     console.log('100!') } setTimeout(c, 100)
+
+main()

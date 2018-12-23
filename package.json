@@ -9,7 +9,10 @@
   "author": "asya lem",
   "license": "ISC",
   "dependencies": {
+    "deferred": "github:tj/deferred.js",
+    "dotenv": "^6.2.0",
     "koa-body": "^4.0.4",
-    "koa-router": "^7.4.0"
+    "koa-router": "^7.4.0",
+    "request-promise-native": "^1.0.5"
   }
 }
