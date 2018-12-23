@@ -209,6 +209,5 @@ async function main() {
 
 }
 
-// function c(){     console.log('100!') } setTimeout(c, 100)
 
 main()
